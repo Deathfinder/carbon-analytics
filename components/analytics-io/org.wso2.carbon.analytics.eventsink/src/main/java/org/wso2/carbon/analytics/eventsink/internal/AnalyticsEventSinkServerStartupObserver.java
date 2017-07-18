@@ -31,6 +31,8 @@ import org.wso2.carbon.utils.multitenancy.MultitenantConstants;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * This class is to observe the server startup and do any deployments
@@ -70,23 +72,34 @@ public class AnalyticsEventSinkServerStartupObserver implements ServerStartupObs
 
         public void run() {
             try {
+                Pattern p = Pattern.compile("/([0-9-]*)/eventsink");
                 AnalyticsEventStoreDeployer deployer = (AnalyticsEventStoreDeployer)
                         CarbonUtils.getDeployer(AnalyticsEventStoreDeployer.class.getName());
                 if (AnalyticsEventStoreDeployer.getPausedDeployments() != null) {
                     List<DeploymentFileData> pausedDeployment = AnalyticsEventStoreDeployer.getPausedDeployments();
                     started.set(true);
-                    PrivilegedCarbonContext.startTenantFlow();
-                    PrivilegedCarbonContext.getThreadLocalCarbonContext().setTenantId(MultitenantConstants.SUPER_TENANT_ID);
                     for (DeploymentFileData deploymentFileData : pausedDeployment) {
+                        Integer tenantId = null;
+                        Matcher m = p.matcher(deploymentFileData.getFile().getAbsolutePath());
+                        while (m.find()) {
+                            tenantId = Integer.valueOf(m.group(1));
+                        }
+                        PrivilegedCarbonContext.startTenantFlow();
+                        PrivilegedCarbonContext.getThreadLocalCarbonContext().setTenantId(tenantId != null ? tenantId : MultitenantConstants.SUPER_TENANT_ID, true);
+                        log.info("Try to deploy eventSink - [" + deploymentFileData.getName() + "], for tenantId - [" + tenantId + "]");
                         try {
                             deployer.deploy(deploymentFileData);
                         } catch (DeploymentException e) {
                             log.error("Error while  deploying analytics event store the file : "
                                     + deploymentFileData.getName(), e);
                         }
+                        PrivilegedCarbonContext.endTenantFlow();
                     }
-                    AnalyticsEventStoreDeployer.clearPausedDeployments();
+
+                    PrivilegedCarbonContext.startTenantFlow();
+                    PrivilegedCarbonContext.getThreadLocalCarbonContext().setTenantId(MultitenantConstants.SUPER_TENANT_ID, true);
                     PrivilegedCarbonContext.endTenantFlow();
+                    AnalyticsEventStoreDeployer.clearPausedDeployments();
                 }
             } catch (CarbonException e) {
                 log.error("Error when getting the deployer for evn store to proceed the initialization of deployments. ", e);
